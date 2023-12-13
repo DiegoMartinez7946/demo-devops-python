@@ -1,0 +1,48 @@
+name: CI/CD Pipeline
+
+on: [push]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    # ... other setup steps ...
+    - name: Build Docker image
+      run: docker build -t my-app:${{ github.sha }} .
+
+    - name: Log in to Amazon ECR
+      run: aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+
+    - name: Push image to Amazon ECR
+      run: |
+        docker tag my-app:${{ github.sha }} ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/my-app:${{ github.sha }}
+        docker push ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/my-app:${{ github.sha }}
+    - name: Update Kubernetes Deployment Image
+      run: |
+        sed -i 's|container-image:.*|container-image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/my-app:${{ github.sha }}|' k8s/deployment.yaml
+    - name: Set up Kubeconfig
+      run: # Your command to configure kubectl for EKS
+
+    - name: Deploy to EKS
+      run: kubectl apply -f k8s/
+    - name: Run unit tests
+      run: python manage.py test
+    - name: Static code analysis with SonarQube
+      uses: sonarsource/sonarqube-scan-action@v1
+      with:
+        projectBaseDir: .
+        args: >
+          -Dsonar.projectKey=myprojectkey
+          -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
+          -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+    - name: Install Coverage.py
+      run: pip install coverage
+    - name: Code coverage
+      run: coverage run --source=app manage.py test
+    - name: Generate coverage report
+      run: coverage report
+    - name: Scan the Docker image for vulnerabilities
+      run: |
+        docker build -t my-app:${{ github.sha }} .
+        trivy image --severity HIGH,CRITICAL my-app:${{ github.sha }}
